@@ -20,16 +20,31 @@ async function run() {
         const appointmentOptionCollection = client.db('bookingApp').collection('appointmentOption');
         const bookingsCollection = client.db('bookingApp').collection('bookings');
 
+        // use Aggregate to query multiple collection and then merge date.
         app.get('/appointmentOption', async (req, res) => {
+            const date = req.query.date;
             const query = {};
-            const option = await appointmentOptionCollection.find(query).toArray();
-            res.send(option);
+            const options = await appointmentOptionCollection.find(query).toArray();
+
+            // get the booking of the provided date
+            const bookingQuery = { appointmentDate: date  }
+            const alreadyBooked =await bookingsCollection.find(bookingQuery).toArray();
+
+            // code carefully: D
+            options.forEach(option => {
+                const optionBooked = alreadyBooked.filter(book => book.treatment === option.name);
+                const bookedSlots = optionBooked.map(book => book.slot)
+                const remainingSlots = option.slots.filter(slot => !bookedSlots.includes(slot))
+                option.slots = remainingSlots;
+                // console.log(date, option.name, remainingSlots.length);
+            })
+            res.send(options);
 
         });
 
         app.post('/bookings', async(req, res) =>{
-            const booking = req.body
-            console.log(booking);
+            const booking = req.body;
+            // console.log(booking);
             const result = await bookingsCollection.insertOne(booking);
             res.send(result);
         })
