@@ -1,7 +1,9 @@
 const express = require('express');
 const cors = require('cors');
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const jwt = require('jsonwebtoken');
+const nodemailer = require('nodemailer');
+const mg = require('nodemailer-mailgun-transport');
 require('dotenv').config();
 
 const port = process.env.PORT || 5000;
@@ -16,6 +18,51 @@ app.use(express.json());
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.kvfjx.mongodb.net/?retryWrites=true&w=majority`;
 const client = new MongoClient(uri, { useNewUrlParser: true, useUnifiedTopology: true, serverApi: ServerApiVersion.v1 });
+
+function sendBookingEmail(booking) {
+    const { email, treatment, appointmentDate, slot } = booking;
+
+    const auth = {
+        auth: {
+          api_key: process.env.EMAIL_SEND_KEY,
+          domain: process.env.EMAIL_SEND_DOMAIN
+        }
+      }
+      
+      const transporter = nodemailer.createTransport(mg(auth));
+
+
+    // let transporter = nodemailer.createTransport({
+    //     host: 'smtp.sendgrid.net',
+    //     port: 587,
+    //     auth: {
+    //         user: "apikey",
+    //         pass: process.env.SENDGRID_API_KEY
+    //     }
+    // });
+
+    transporter.sendMail({
+        from: "nasimatpi@gmail.com", // verified sender email
+        to: email || 'nasimatpi@gmail.com',
+        subject: `Your appointment for ${treatment} is confirmed.`, // Subject line
+        text: "Hello world!", // plain text body
+        html: `
+        <h3>Your appointment is confirmed</h3>
+        <div>
+            <p>Your appointment for service:${treatment}</p>
+            <p>Please visit us on ${appointmentDate} at ${slot}</p>
+            <p>Thanks from service booking.</p>
+        </div>
+        
+        `, // html body
+    }, function (error, info) {
+        if (error) {
+            console.log(error);
+        } else {
+            console.log('Email sent: ' + info.response);
+        }
+    });
+}
 
 function verifyJWT(req, res, next) {
 
@@ -43,21 +90,33 @@ async function run() {
         const usersCollection = client.db('bookingApp').collection('users');
         const sellersCollection = client.db('bookingApp').collection('sellers');
 
+        //note: make sure you use verifydmin after verifyjwt
+        const verifyAdmin = async (req, res, next) => {
+            const decodedEmail = req.decoded.email;
+            const query = { email: decodedEmail };
+            const user = await usersCollection.findOne(query);
+
+            if (user?.role !== 'admin') {
+                return res.status(403).send({ message: 'forbidden access' })
+            }
+            next();
+        }
+
         // use Aggregate to query multiple collection and then merge date.
-        app.get('/appointmentOption', async (req, res) => {
+        app.get('/appointmentOptions', async (req, res) => {
             const date = req.query.date;
             const query = {};
             const options = await appointmentOptionCollection.find(query).toArray();
 
             // get the booking of the provided date
-            const bookingQuery = { appointmentDate: date  }
-            const alreadyBooked =await bookingsCollection.find(bookingQuery).toArray();
+            const bookingQuery = { appointmentDate: date }
+            const alreadyBooked = await bookingsCollection.find(bookingQuery).toArray();
 
             // code carefully: D
             options.forEach(option => {
                 const optionBooked = alreadyBooked.filter(book => book.treatment === option.name);
                 const bookedSlots = optionBooked.map(book => book.slot)
-                const remainingSlots = option.slots.filter(slot => !bookedSlots.includes(slot))
+                const remainingSlots = option.slots.filter(slot => !bookedSlots.includes(slot));
                 option.slots = remainingSlots;
             })
             res.send(options);
@@ -114,7 +173,10 @@ async function run() {
             res.send(result);
         })
 
-
+        // app.get('/booking', async(req, res) =>{
+        //     const email= req.query.email;
+        //     const query = {email: email}
+        // })
 
 
         app.get('/bookings', verifyJWT, async (req, res) => {
@@ -130,22 +192,23 @@ async function run() {
             res.send(bookings);
         })
 
-        app.post('/bookings', async(req, res) =>{
+        app.post('/bookings', async (req, res) => {
             const booking = req.body;
             console.log(booking);
             const query = {
                 appointmentDate: booking.appointmentDate,
                 email: booking.email,
-                treatment: booking.treatment 
+                treatment: booking.treatment
             }
-            const alreadyBooked  = await bookingsCollection.find(query).toArray();
-            
-            if (alreadyBooked.length){
+            const alreadyBooked = await bookingsCollection.find(query).toArray();
+
+            if (alreadyBooked.length) {
                 const message = `You already have a booking on ${booking.appointmentDate}`
-                return res.send({acknowledged: false, message})
+                return res.send({ acknowledged: false, message })
             }
-            
+
             const result = await bookingsCollection.insertOne(booking);
+            sendBookingEmail(booking);
             res.send(result);
         })
 
@@ -173,22 +236,14 @@ async function run() {
             res.send({ isAdmin: user?.role === 'admin' });
         })
 
-        app.post('/users', async(req, res) =>{
+        app.post('/users', async (req, res) => {
             const user = req.body;
             console.log(user);
             const result = await usersCollection.insertOne(user);
             res.send(result);
         });
 
-        app.put('/users/admin/:id', verifyJWT, async (req, res) => {
-            const decodedEmail = req.decoded.email;
-            const query = { email: decodedEmail };
-            const user = await usersCollection.findOne(query);
-
-            if (user?.role !== 'admin') {
-                return res.status(403).send({ message: 'forbidden access' })
-            }
-
+        app.put('/users/admin/:id', verifyJWT, verifyAdmin, async (req, res) => {
             const id = req.params.id;
             const filter = { _id: ObjectId(id) }
             const options = { upsert: true };
@@ -201,18 +256,25 @@ async function run() {
             res.send(result);
         })
 
-        app.get('/sellers', async(req, res) =>{
+        app.get('/sellers', verifyJWT, verifyAdmin, async (req, res) => {
             const query = {};
             const sellers = await sellersCollection.find(query).toArray();
             res.send(sellers);
 
         })
 
-        app.post('/sellers', async (req, res) => {
+        app.post('/sellers', verifyJWT, verifyAdmin, async (req, res) => {
             const seller = req.body;
             const result = await sellersCollection.insertOne(seller);
             res.send(result);
         });
+
+        app.delete('sellers/:id', verifyJWT, verifyAdmin, async (req, res) => {
+            const id = req.params.id;
+            const filter = { _id: ObjectId(id) };
+            const result = await sellersCollection.deleteOne(filter);
+            res.send(result);
+        })
 
     }
     finally {
