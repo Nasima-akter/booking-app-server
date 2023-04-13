@@ -11,7 +11,8 @@ const port = process.env.PORT || 5000;
 const app = express();
 
 // middleware
-app.use(cors());
+app.use(cors())
+
 app.use(express.json());
 
 
@@ -57,7 +58,7 @@ function sendBookingEmail(booking) {
         `, // html body
     }, function (error, info) {
         if (error) {
-            console.log(error);
+            console.log('Email send error',error);
         } else {
             console.log('Email sent: ' + info.response);
         }
@@ -173,11 +174,16 @@ async function run() {
             res.send(result);
         })
 
-        // app.get('/booking', async(req, res) =>{
-        //     const email= req.query.email;
-        //     const query = {email: email}
-        // })
 
+// testing
+
+        app.get('/bookings/admin', async (req, res) => {
+            const query = {};
+            const bookings = await bookingsCollection.find(query).toArray();
+            res.send(bookings);
+        })
+
+// testing
 
         app.get('/bookings', verifyJWT, async (req, res) => {
             const email = req.query.email;
@@ -243,9 +249,10 @@ async function run() {
             res.send(result);
         });
 
-        app.put('/users/admin/:id', verifyJWT, verifyAdmin, async (req, res) => {
+        app.patch('/users/admin/:id', verifyJWT, verifyAdmin, async (req, res) => {
+            console.log(res)
             const id = req.params.id;
-            const filter = { _id: ObjectId(id) }
+            const filter = { _id: new ObjectId(id) }
             const options = { upsert: true };
             const updatedDoc = {
                 $set: {
@@ -269,10 +276,24 @@ async function run() {
             res.send(result);
         });
 
-        app.delete('sellers/:id', verifyJWT, verifyAdmin, async (req, res) => {
+        app.delete('/sellers/:id', verifyJWT, verifyAdmin, async (req, res) => {
             const id = req.params.id;
-            const filter = { _id: ObjectId(id) };
+            const filter = { _id: new ObjectId(id) };
             const result = await sellersCollection.deleteOne(filter);
+            res.send(result);
+        })
+
+        app.delete('/users/:id', async(req, res) => {
+            const id = req.params.id;
+            const filter = {_id: new ObjectId(id)};
+            const result = await usersCollection.deleteOne(filter);
+            res.send(result);
+        })
+
+        app.delete('/bookings/:id', async(req, res) => {
+            const id = req.params.id;
+            const filter = {_id: new ObjectId(id)};
+            const result = await usersCollection.deleteOne(filter);
             res.send(result);
         })
 
